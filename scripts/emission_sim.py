@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
-"""AURORA issuance model simulator — research tool, not consensus code.
+"""AURORA experimental issuance simulator, not consensus code.
 
-Run:
-    python3 scripts/emission_sim.py
-
-The current consensus schedule is proportional to remaining gross supply;
-historical tier candidates remain only for comparison. All amounts use integer
-atomic units. Timing is an assumption, not a forecast.
-"""AURORA issuance schedule simulator — research tool, not consensus code.
-
-Run:
-    python3 scripts/emission_sim.py
-
-All amounts use integer atomic units. Tier thresholds are evaluated against
-supply at the START of a block: a block may cross a tier threshold, and the
-next block uses the next applicable tier. The final reward is clipped to the
-strict gross issuance cap. Fixed 120-second block timing is only a scenario.
+Default output compares the current proportional schedule with historical tier
+candidates. With --heights, fast-forward over intervals with the same integer
+reward to inspect millions of conceptual blocks without creating a blockchain.
+All amounts use integer atomic units. Time estimates are not forecasts.
 """
 
+from argparse import ArgumentParser
 from dataclasses import dataclass
 from math import ceil
 
@@ -182,6 +172,78 @@ def simulate_proportional_remaining() -> dict[str, int | float | str]:
     return {"name": "proportional-remaining", "issued": issued, "blocks": blocks, "years": years}
 
 
+def simulate_at_heights(
+    heights: list[int],
+    *,
+    cap: int = CAP,
+    denominator: int = 1_000_000,
+) -> list[dict[str, int]]:
+    """Exactly replay issuance in constant-reward intervals, not by mining.
+
+    In a reward interval, floor(remaining / denominator) is constant. The
+    first block that lowers this quotient is included in the interval.
+    Treasury floor is applied PER BLOCK, not to the interval's aggregate.
+
+    The result is exact integer arithmetic for the same reward recurrence as
+    scheduled_issuance in reward.rs; it is not a P2P/storage stress test.
+    """
+    if cap <= 0 or denominator <= 0:
+        raise ValueError("cap and denominator must be positive")
+    if any(height < 0 for height in heights):
+        raise ValueError("block heights must be non-negative")
+    snapshots: dict[int, dict[str, int]] = {}
+    remaining = cap
+    blocks = 0
+    treasury = 0
+    cap_reached_at = 0
+    for height in sorted(set(heights)):
+        while blocks < height:
+            if remaining == 0:
+                blocks = height
+                break
+            reward = max(1, remaining // denominator)
+            if reward == 1:
+                # The one-unit floor persists until the cap is exhausted.
+                batch = min(height - blocks, remaining)
+            else:
+                # Include the block that first crosses below this quotient.
+                batch = min(
+                    height - blocks, (remaining % denominator) // reward + 1
+                )
+            remaining -= batch * reward
+            treasury += batch * (reward // 20)
+            blocks += batch
+            if remaining == 0 and cap_reached_at == 0:
+                cap_reached_at = blocks
+        issued = cap - remaining
+        snapshots[height] = {
+            "height": height,
+            "issued_units": issued,
+            "treasury_units": treasury,
+            "miner_units": issued - treasury,
+            "remaining_units": remaining,
+            "cap_reached_at": cap_reached_at,
+        }
+    return [snapshots[height] for height in heights]
+
+
+def print_height_simulation(heights: list[int]) -> None:
+    print("height,issued_AUR,treasury_AUR,miner_AUR,remaining_AUR,cap_reached_at")
+    for state in simulate_at_heights(heights):
+        print(
+            f"{state['height']},"
+            f"{format_aur(state['issued_units'])},"
+            f"{format_aur(state['treasury_units'])},"
+            f"{format_aur(state['miner_units'])},"
+            f"{format_aur(state['remaining_units'])},"
+            f"{state['cap_reached_at'] or 'not_yet'}"
+        )
+    print(
+        "NOTE: mathematical issuance recurrence only; no blocks mined,"
+        " stored, signed, validated, or sent over TCP."
+    )
+
+
 def main() -> None:
     current = simulate_proportional_remaining()
     results = [simulate(name, tiers) for name, tiers in CANDIDATES.items()]
@@ -191,4 +253,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = ArgumentParser(description="Research-only AURORA emission simulator")
+    parser.add_argument(
+        "--heights",
+        nargs="+",
+        type=int,
+        metavar="BLOCKS",
+        help="simulate issuance at selected block heights (e.g. 10000000 100000000 500000000)",
+    )
+    arguments = parser.parse_args()
+    if arguments.heights:
+        print_height_simulation(arguments.heights)
+    else:
+        main()

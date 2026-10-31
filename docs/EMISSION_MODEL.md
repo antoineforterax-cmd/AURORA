@@ -44,6 +44,43 @@ La trésorerie reçoit les fonds à l’identifiant testnet fixe `[0xA0; 32]`. D
 
 Quand le plafond est atteint, l’émission est nulle et la rémunération du mineur provient uniquement des frais. Le partage actuel des frais reste 50 % au mineur / 50 % brûlés; ainsi, « 100 % par les frais » décrit la source du revenu du mineur après l’émission, pas une allocation de 100 % de tous les frais au mineur.
 
+## Simulation des hauteurs extrêmes (sans minage ni écriture disque)
+
+Le simulateur Python indépendant `scripts/emission_sim.py` propose une
+commande de contrôle des jalons, sans fabriquer de blocs, ni envoyer de
+transactions, ni réserver des centaines de millions d'entrées en mémoire :
+
+```sh
+python3 scripts/emission_sim.py --heights 10000000 100000000 500000000
+python3 -m unittest discover -s scripts -p 'test_emission_sim.py'
+```
+
+Le calcul utilise des entiers et saute les intervalles où la récompense par
+bloc est constante. **Chaque part de trésorerie est toujours arrondie par
+bloc avant addition**, comme dans `scheduled_issuance` et
+`apply_block_reward` ; un arrondi global à 5 % serait incorrect.
+
+Selon le profil testnet `proportional-remaining-1e6-v1` actuellement codé
+(plafond **500 millions AUR**, à distinguer des **500 millions de blocs**) :
+
+| Hauteur simulée | Émission brute totale (AUR) | Émission restante (AUR) |
+| ---: | ---: | ---: |
+| 10 000 000 | 499 977 300,14361895 | 22 699,85638105 |
+| 100 000 000 | 500 000 000,00000000 | 0 |
+| 500 000 000 | 500 000 000,00000000 | 0 |
+
+La dernière unité d'émission est atteinte au bloc **26 212 491** selon la
+récurrence entière simulée. Tous les blocs suivants ont une émission nouvelle
+nulle, sans que cela interdise les transactions ou les frais. À la cible
+théorique de **60 secondes par bloc**, ce jalon serait à ~49,8 ans ; la
+durée réelle n'est pas déduite d'un test de consensus ou de réseau.
+
+**Ce que ce test ne démontre pas :** traitement de 10 M, 100 M ou 500 M de blocs
+par un nœud, consommation de RAM/disque, débit P2P, temps de validation,
+sécurité sur très longue durée, ni disponibilité réelle des mineurs. Ces
+performances demandent des campagnes matérielles et réseau distinctes. Aucun
+paramètre de consensus n'est changé par ce simulateur.
+
 ## Vérifications et changements de protocole
 
 Les tests vérifient le démarrage à 500 AUR, la décroissance entière, l’absence de saut autour d’anciens seuils, le plancher, le plafond, le partage 5/95, les frais impairs et les réorganisations. L’identifiant `proportional-remaining-1e6-v1` est inclus dans l’empreinte P2P afin que les pairs exécutant une autre règle d’émission soient incompatibles.

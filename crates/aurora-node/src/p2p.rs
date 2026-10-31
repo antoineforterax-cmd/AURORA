@@ -3340,6 +3340,100 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A later hostile page must not undo the last durably accepted page.
+    /// The rejected page must never become visible in memory or after restart.
+    #[test]
+    fn invalid_later_page_preserves_last_committed_page_on_disk() {
+        let dir =
+            std::env::temp_dir().join(format!("aurora-p2p-later-bad-page-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut remote = chain();
+        for height in 1..=PAGE_BLOCKS {
+            let block = AccountBlock::build(
+                NetworkId::Regtest,
+                remote.tip_hash(),
+                u64::try_from(height + 1).unwrap(),
+                0,
+                vec![],
+            )
+            .unwrap();
+            remote.submit(block).unwrap();
+        }
+        let committed_height = remote.height();
+        let committed_tip = remote.tip_hash();
+        // Advertise one more position so the receiver asks for another page.
+        let last = AccountBlock::build(
+            NetworkId::Regtest,
+            remote.tip_hash(),
+            u64::try_from(PAGE_BLOCKS + 2).unwrap(),
+            0,
+            vec![],
+        )
+        .unwrap();
+        remote.submit(last).unwrap();
+        assert_eq!(remote.known_block_count(), PAGE_BLOCKS + 2);
+        let bad = AccountBlock::build(
+            NetworkId::Regtest,
+            sha256_plain(b"absent-parent-on-second-page"),
+            u64::try_from(PAGE_BLOCKS + 3).unwrap(),
+            0,
+            vec![],
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            set_timeouts(&stream).unwrap();
+            read_frame(&mut stream).unwrap();
+            send_hello(&mut stream, &remote).unwrap();
+
+            let first_request = read_frame(&mut stream).unwrap();
+            assert_eq!(first_request[0], GET_BLOCKS);
+            assert_eq!(
+                u64::from_be_bytes(first_request[1..9].try_into().unwrap()),
+                1
+            );
+            write_frame(&mut stream, &build_blocks_page(&remote, 1).unwrap()).unwrap();
+
+            let second_request = read_frame(&mut stream).unwrap();
+            assert_eq!(second_request[0], GET_BLOCKS);
+            assert_eq!(
+                u64::from_be_bytes(second_request[1..9].try_into().unwrap()),
+                u64::try_from(PAGE_BLOCKS + 1).unwrap()
+            );
+            let encoded = bad.to_canonical_bytes().unwrap();
+            let mut page = vec![BLOCKS_REPLY];
+            page.extend_from_slice(&(remote.known_block_count() as u64).to_be_bytes());
+            page.extend_from_slice(&1u32.to_be_bytes());
+            page.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            page.extend_from_slice(&encoded);
+            write_frame(&mut stream, &page).unwrap();
+        });
+
+        let mut receiver = chain();
+        assert!(matches!(
+            sync_from_peer(address, &mut receiver, &dir),
+            Err(P2pError::Chain(_))
+        ));
+        assert_eq!(receiver.height(), committed_height);
+        assert_eq!(receiver.tip_hash(), committed_tip);
+        assert_eq!(receiver.known_block_count(), PAGE_BLOCKS + 1);
+        drop(receiver);
+
+        let restored =
+            aurora_storage::load_latest_snapshot(&dir, AccountLedger::new(NetworkId::Regtest))
+                .unwrap();
+        assert_eq!(restored.height(), committed_height);
+        assert_eq!(restored.tip_hash(), committed_tip);
+        assert_eq!(restored.known_block_count(), PAGE_BLOCKS + 1);
+        server.join().unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn failed_snapshot_does_not_publish_a_synced_page() {
         let path = std::env::temp_dir().join(format!(

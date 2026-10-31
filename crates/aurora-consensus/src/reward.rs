@@ -153,6 +153,50 @@ mod tests {
         assert!(scheduled_issuance(before).to_units() - scheduled_issuance(after).to_units() <= 1);
     }
 
+    /// Cross-check the Python fast-forward vectors by actually applying the
+    /// production reward function at every issuance step, without mining blocks.
+    /// Only the post-cap milestones are skipped, because rewards are then zero.
+    #[test]
+    fn emission_million_height_vectors_match_the_real_reward_function() {
+        let mut issued = 0u64;
+        let mut treasury = 0u64;
+        let mut height = 0u64;
+
+        while issued < CAP_UNITS {
+            let reward = scheduled_issuance(Amount::from_units(issued).unwrap()).to_units();
+            assert!(reward > 0, "issuance stopped before reaching the cap");
+            issued = issued.checked_add(reward).expect("gross supply overflow");
+            treasury = treasury
+                .checked_add(reward / 20)
+                .expect("treasury overflow");
+            height += 1;
+            assert!(issued <= CAP_UNITS, "issuance exceeded cap");
+            assert!(
+                height <= 30_000_000,
+                "emission unexpectedly failed to converge"
+            );
+
+            if height == 10_000_000 {
+                assert_eq!(issued, 49_997_730_014_361_895);
+                assert_eq!(treasury, 2_499_886_495_968_424);
+            }
+        }
+
+        assert_eq!(height, 26_212_491);
+        assert_eq!(issued, CAP_UNITS);
+        assert_eq!(treasury, 2_499_999_988_792_316);
+        assert_eq!(issued - treasury, 47_500_000_011_207_684);
+        // These are arithmetic checkpoints, not 100M or 500M stored blocks:
+        // no additional issuance occurs at either future height.
+        for future_height in [100_000_000u64, 500_000_000] {
+            assert!(future_height > height);
+            assert_eq!(
+                scheduled_issuance(Amount::from_units(issued).unwrap()),
+                Amount::ZERO
+            );
+        }
+    }
+
     #[test]
     fn fee_split_rounds_miner_down_and_burns_remainder() {
         let miner = AccountId([1; 32]);

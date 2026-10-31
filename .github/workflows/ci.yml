@@ -22,6 +22,10 @@ jobs:
         run: cargo build --workspace --locked
       - name: Vérifier les vecteurs indépendants du retarget
         run: python3 scripts/retarget_sim.py --check
+      - name: Simulation indépendante des émissions 10M / 100M / 500M
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_emission_sim.py'
+          python3 scripts/emission_sim.py --heights 10000000 100000000 500000000
       - name: Tests
         run: cargo test --workspace --locked
       - name: Testnet multi-nœuds
