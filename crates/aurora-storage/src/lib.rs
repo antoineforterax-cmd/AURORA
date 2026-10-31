@@ -2436,7 +2436,7 @@ mod tests {
             .ok()
             .map(|value| value.parse::<u64>().expect("block count must be u64"))
             .unwrap_or(2_048);
-        assert!((256..=16_384).contains(&count));
+        assert!((256..=32_768).contains(&count));
         let path = dir();
         let mut original = chain();
         let started = std::time::Instant::now();

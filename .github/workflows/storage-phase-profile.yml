@@ -2,7 +2,7 @@ name: storage-phase-profile
 
 on:
   push:
-    branches: [test/storage-phase-profile-8192, test/storage-profile-2048-8192-ci]
+    branches: [test/storage-phase-profile-8192, test/storage-profile-2048-8192-ci, test/storage-phase-profile-32768-20261031]
     paths:
       - "crates/aurora-storage/**"
       - ".github/workflows/storage-phase-profile.yml"
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       blocks:
-        description: "Blocks after genesis (256..16384)"
+        description: "Blocks after genesis (256..32768)"
         required: false
         default: "2048"
 
@@ -40,13 +40,17 @@ jobs:
             case "$REQUESTED_BLOCKS" in
               *[!0-9]*|'') echo "Block count must be a decimal integer" >&2; exit 2 ;;
             esac
-            if [ "$REQUESTED_BLOCKS" -lt 256 ] || [ "$REQUESTED_BLOCKS" -gt 16384 ]; then
-              echo "Allowed manual block counts: 256..16384" >&2
+            if [ "$REQUESTED_BLOCKS" -lt 256 ] || [ "$REQUESTED_BLOCKS" -gt 32768 ]; then
+              echo "Allowed manual block counts: 256..32768" >&2
               exit 2
             fi
             block_counts="$REQUESTED_BLOCKS"
           else
-            block_counts="2048 8192"
+            if [ "$GITHUB_REF" = "refs/heads/test/storage-phase-profile-32768-20261031" ]; then
+              block_counts="8192 32768"
+            else
+              block_counts="2048 8192"
+            fi
           fi
           echo "Storage profile volumes: $block_counts"
           for blocks in $block_counts; do
